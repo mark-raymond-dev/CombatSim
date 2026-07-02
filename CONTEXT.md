@@ -1,7 +1,6 @@
 # CombatSim — Project Context File
 # Keep this file current. Paste it into every new chat window at the start of a session.
 # Update the "Active Milestone" and "Decisions Log" sections as work progresses.
-# (test change)
 
 ---
 
