@@ -9,6 +9,8 @@ public class CombatOutput
 
     public List<RoundOutput> Rounds { get; set; } = new List<RoundOutput>();
     public bool DidHeroesWin { get; set; }
+    public long ElapsedMilliseconds { get; set; }
+    public int CacheCount { get; set; }
 
     #endregion
 
@@ -48,6 +50,9 @@ public class CombatOutput
         sb.Append("------------------\n");
         sb.Append("--- Combat End ---\n");
         sb.Append("------------------\n");
+        sb.Append("\n");
+        sb.Append($"Elapsed milliseconds: {this.ElapsedMilliseconds}\n");
+        sb.Append($"Cache count: {this.CacheCount}\n");
         sb.Append("\n");
 
         return sb.ToString();

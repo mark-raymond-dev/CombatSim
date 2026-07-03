@@ -13,6 +13,7 @@ public class CombatOutputCollectionReport
     public decimal HeroWinPercentage { get; set; }
     public decimal HeroLosePercentage { get; set; }
     public double AverageRoundsPerCombat { get; set; }
+    public int CacheCount { get; set; }
 
     #endregion
 
@@ -28,6 +29,7 @@ public class CombatOutputCollectionReport
         sb.Append($"Hero win percentage: {HeroWinPercentage:P3}\n");
         sb.Append($"Hero lose percentage: {HeroLosePercentage:P3}\n");
         sb.Append($"Average rounds per combat: {AverageRoundsPerCombat:F3}\n");
+        sb.Append($"Final cache count: {CacheCount}\n");
         return sb.ToString();
     }
 

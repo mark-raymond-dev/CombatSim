@@ -1,9 +1,28 @@
 using CombatSim.Core.Features.Simulator.Models;
+using System.Net.Http.Json;
+using System.Diagnostics;
 
 namespace CombatSim.Core.Features.Simulator.Services;
 
 public class SimulatorService
 {
+
+    #region Private Properies (Injections)
+
+    private readonly HttpClient _httpClient;
+    private readonly Dictionary<string, ParseDamageResponse> _cache;
+
+    #endregion
+
+    #region Constructors
+
+    public SimulatorService(HttpClient httpClient, Dictionary<string, ParseDamageResponse> cache)
+    {
+        _httpClient = httpClient;
+        _cache = cache;
+    }
+
+    #endregion
 
     #region Private Methods
 
@@ -26,22 +45,6 @@ public class SimulatorService
         return continueCombat;
     }
 
-    private int RollDamage(Creature attacker, DegreeOfSuccess degreeOfSuccess)
-    {
-        // For now, we will hard code the die size to 6, the die count to 2, 
-        // and the modifier to 3, essentially giving us:  2d6+3
-        int baseDamage = DieRoller.Roll(6, 2, 3);
-        int actualDamage = degreeOfSuccess switch
-        {
-            DegreeOfSuccess.CriticalMiss => 0,
-            DegreeOfSuccess.Miss => 0,
-            DegreeOfSuccess.Hit => baseDamage,
-            DegreeOfSuccess.CriticalHit => baseDamage * 2,
-            _ => throw new NotImplementedException()
-        };        
-        return actualDamage;
-    }
-
     private string GetAttackLog(Creature attacker, Creature defender, DegreeOfSuccess degreeOfSuccess, int damage)
     {
         int hp1 = defender.HP;
@@ -61,13 +64,76 @@ public class SimulatorService
         return log;
     }
     
-    private AttackResult ProcessAttack(Creature attacker, Creature defender)
+    private string GetApiCallExceptionSuffix(HttpResponseMessage response)
+    {
+        return $"URL='{response.RequestMessage?.RequestUri}', StatusCode={response.StatusCode}, ReasonPhrase={response.ReasonPhrase}";
+    }
+
+    #endregion
+
+    #region Private Async Methods
+
+    private async Task<ParseDamageResponse> ParseDamage(string damageExpression)
+    {
+        // Check if the result is already cached
+        if (_cache.TryGetValue(damageExpression, out var cachedResult)) return cachedResult!;
+
+        // Call the API to parse the damage expression. Retry up to 3 times if we get a "Too Many Requests" response.
+        var apiBase = "https://battleready-api-b4h4brhga5dea5ay.westus3-01.azurewebsites.net";
+        var apiUrlGet = $"{apiBase}/api/v1/ParseDamage/calculate?Expression={Uri.EscapeDataString(damageExpression)}";
+        int maxRetries = 3;
+        var response = await _httpClient.GetAsync(apiUrlGet);
+        if (!response.IsSuccessStatusCode)
+        {
+            if (response.StatusCode != System.Net.HttpStatusCode.TooManyRequests)
+            {
+                throw new Exception($"Something went wrong with API call: {GetApiCallExceptionSuffix(response)}");
+            }
+
+            for (int retry = 1; retry <= maxRetries; retry++)
+            {
+                await Task.Delay(300 * retry); // Exponential backoff
+                response = await _httpClient.GetAsync(apiUrlGet);
+                if (response.IsSuccessStatusCode) break;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new Exception($"API call failed after {maxRetries} retries: {GetApiCallExceptionSuffix(response)}");
+            }
+        }
+
+        // Deserialize the response into a ParseDamageResponse object, then cache and return it.
+        var result = await response.Content.ReadFromJsonAsync<ParseDamageResponse>()
+            ?? throw new Exception($"Failed to parse damage expression: '{damageExpression}'");
+        _cache[damageExpression] = result;
+        return result;
+    }
+
+    private async Task<int> RollDamage(Creature attacker, DegreeOfSuccess degreeOfSuccess)
+    {
+        var result = await ParseDamage(attacker.Damage);
+        
+        int baseDamage = DieRoller.Roll(result.DamageDieBase, result.DamageDieCount, result.DamageModifier);
+        
+        int actualDamage = degreeOfSuccess switch
+        {
+            DegreeOfSuccess.CriticalMiss => 0,
+            DegreeOfSuccess.Miss => 0,
+            DegreeOfSuccess.Hit => baseDamage,
+            DegreeOfSuccess.CriticalHit => baseDamage * 2,
+            _ => throw new NotImplementedException()
+        };        
+        return actualDamage;
+    }
+
+    private async Task<AttackResult> ProcessAttack(Creature attacker, Creature defender)
     {
         int d20 = DieRoller.SimpleRoll(20);
         var degreeOfSuccess = DegreeOfSuccessCalculator.GetDegreeOfSuccess(
             attacker.ToHit, d20, defender.AC,
             natural20Upgrades: true, natural1Downgrades: true);
-        int damage = RollDamage(attacker, degreeOfSuccess);
+        int damage = await RollDamage(attacker, degreeOfSuccess);
         var log = GetAttackLog(attacker, defender, degreeOfSuccess, damage);
         return new AttackResult
         {
@@ -82,24 +148,27 @@ public class SimulatorService
 
     #endregion
 
-    #region Public Methods
+    #region Public Async Methods
 
-    public CombatOutputCollection FightMultiple(CombatInput combatInput, int count = 1)
+    public async Task<CombatOutputCollection> FightMultiple(CombatInput combatInput, int count = 1)
     {
         var combatOutputCollection = new CombatOutputCollection();
 
         for (var i = 0; i < count; i++)
         {
             var combatInputClone = combatInput.Clone();
-            var combatOutput = Fight(combatInputClone);
+            var combatOutput = await Fight(combatInputClone);
             combatOutputCollection.Add(combatOutput);
         }
 
+        combatOutputCollection.CacheCount = _cache.Count;
         return combatOutputCollection;
     }
 
-    public CombatOutput Fight(CombatInput combatInput)
+    public async Task<CombatOutput> Fight(CombatInput combatInput, int millisecondsDelayBetweenRounds = 0)
     {
+        Stopwatch stopwatch = new Stopwatch();
+        stopwatch.Start();
         var combatOutput = new CombatOutput();
         int roundNumber = 0;
         bool continueCombat = IsContinueCombat(combatInput);
@@ -120,7 +189,7 @@ public class SimulatorService
                         .FirstOrDefault(p => p.IsHero == !attacker.IsHero && p.HP > 0);
                     if (defender != null)
                     {
-                        var attackResult = ProcessAttack(attacker, defender);
+                        var attackResult = await ProcessAttack(attacker, defender);
                         defender.HP -= attackResult.Damage;
                         roundOutput.AttackResults.Add(attackResult);
                     }                    
@@ -128,10 +197,19 @@ public class SimulatorService
             }
             combatOutput.Rounds.Add(roundOutput);
             continueCombat = IsContinueCombat(combatInput);
+            if (continueCombat && millisecondsDelayBetweenRounds > 0)
+            {
+                // Add a small delay to avoid overwhelming the API with requests.
+                // NOTE: We use "await Task.Delay" instead of "Thread.Sleep" to avoid blocking the thread.
+                await Task.Delay(millisecondsDelayBetweenRounds);
+            }
         }
 
         int heroAliveCount = AliveCount(combatInput, isHero: true);
         combatOutput.DidHeroesWin = heroAliveCount > 0;
+        stopwatch.Stop();
+        combatOutput.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
+        combatOutput.CacheCount = _cache.Count;
         return combatOutput;
     }
 
