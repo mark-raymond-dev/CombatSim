@@ -4,19 +4,19 @@ using System.Diagnostics;
 
 namespace CombatSim.Core.Features.Simulator.Services;
 
-public class SimulatorService
+public class SimulatorService : ISimulatorService
 {
 
     #region Private Properies (Injections)
 
     private readonly HttpClient _httpClient;
-    private readonly Dictionary<string, ParseDamageResponse> _cache;
+    private readonly IDictionary<string, ParseDamageResponse> _cache;
 
     #endregion
 
     #region Constructors
 
-    public SimulatorService(HttpClient httpClient, Dictionary<string, ParseDamageResponse> cache)
+    public SimulatorService(HttpClient httpClient, IDictionary<string, ParseDamageResponse> cache)
     {
         _httpClient = httpClient;
         _cache = cache;
@@ -45,7 +45,7 @@ public class SimulatorService
         return continueCombat;
     }
 
-    private string GetAttackLog(Creature attacker, Creature defender, DegreeOfSuccess degreeOfSuccess, int damage)
+    private string GetAttackLog(CreatureInput attacker, CreatureInput defender, DegreeOfSuccess degreeOfSuccess, int damage)
     {
         int hp1 = defender.HP;
         int hp2 = hp1 - damage;
@@ -110,7 +110,7 @@ public class SimulatorService
         return result;
     }
 
-    private async Task<int> RollDamage(Creature attacker, DegreeOfSuccess degreeOfSuccess)
+    private async Task<int> RollDamage(CreatureInput attacker, DegreeOfSuccess degreeOfSuccess)
     {
         var result = await ParseDamage(attacker.Damage);
         
@@ -127,7 +127,7 @@ public class SimulatorService
         return actualDamage;
     }
 
-    private async Task<AttackResult> ProcessAttack(Creature attacker, Creature defender)
+    private async Task<AttackResult> ProcessAttack(CreatureInput attacker, CreatureInput defender)
     {
         int d20 = DieRoller.SimpleRoll(20);
         var degreeOfSuccess = DegreeOfSuccessCalculator.GetDegreeOfSuccess(
@@ -146,31 +146,14 @@ public class SimulatorService
         };
     }
 
-    #endregion
-
-    #region Public Async Methods
-
-    public async Task<CombatOutputCollection> FightMultiple(CombatInput combatInput, int count = 1)
-    {
-        var combatOutputCollection = new CombatOutputCollection();
-
-        for (var i = 0; i < count; i++)
-        {
-            var combatInputClone = combatInput.Clone();
-            var combatOutput = await Fight(combatInputClone);
-            combatOutputCollection.Add(combatOutput);
-        }
-
-        combatOutputCollection.CacheCount = _cache.Count;
-        return combatOutputCollection;
-    }
-
-    public async Task<CombatOutput> Fight(CombatInput combatInput, int millisecondsDelayBetweenRounds = 0)
+    private async Task<CombatOutput> ProcessCombat(CombatInput combatInput)
     {
         Stopwatch stopwatch = new Stopwatch();
         stopwatch.Start();
+
         var combatOutput = new CombatOutput();
         int roundNumber = 0;
+        int msDelay = combatInput.MillisecondsDelayBetweenRounds;
         bool continueCombat = IsContinueCombat(combatInput);
         while (continueCombat)
         {
@@ -197,20 +180,47 @@ public class SimulatorService
             }
             combatOutput.Rounds.Add(roundOutput);
             continueCombat = IsContinueCombat(combatInput);
-            if (continueCombat && millisecondsDelayBetweenRounds > 0)
+            if (continueCombat && msDelay > 0)
             {
                 // Add a small delay to avoid overwhelming the API with requests.
                 // NOTE: We use "await Task.Delay" instead of "Thread.Sleep" to avoid blocking the thread.
-                await Task.Delay(millisecondsDelayBetweenRounds);
+                await Task.Delay(msDelay);
             }
         }
 
         int heroAliveCount = AliveCount(combatInput, isHero: true);
         combatOutput.DidHeroesWin = heroAliveCount > 0;
+        combatOutput.CacheCount = _cache.Count;
+
         stopwatch.Stop();
         combatOutput.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
-        combatOutput.CacheCount = _cache.Count;
         return combatOutput;
+    }
+
+    #endregion
+
+    #region Public Async Methods
+
+    public async Task<CombatOutputCollection> Simulate(CombatInput combatInput)
+    {
+        Stopwatch stopwatch = new Stopwatch();
+        stopwatch.Start();
+
+        var combatOutputCollection = new CombatOutputCollection();
+
+        // Execute the Fight method multiple times based on the SimulationCount property of CombatInput.
+        for (var i = 0; i < combatInput.SimulationCount; i++)
+        {
+            var combatInputClone = combatInput.Clone();
+            var combatOutput = await ProcessCombat(combatInputClone);
+            combatOutputCollection.Add(combatOutput);
+        }
+
+        combatOutputCollection.CacheCount = _cache.Count;
+
+        stopwatch.Stop();
+        combatOutputCollection.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
+        return combatOutputCollection;
     }
 
     #endregion

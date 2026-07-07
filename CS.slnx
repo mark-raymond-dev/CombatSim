@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="CombatSim.Api/CombatSim.Api.csproj" />
   <Project Path="CombatSim.Console/CombatSim.Console.csproj" />
   <Project Path="CombatSim.Core/CombatSim.Core.csproj" />
 </Solution>

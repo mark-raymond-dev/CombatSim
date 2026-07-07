@@ -1,0 +1,6 @@
+@CombatSim.Api_HostAddress = http://localhost:5234
+
+GET {{CombatSim.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

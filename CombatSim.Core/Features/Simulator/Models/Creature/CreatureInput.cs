@@ -1,6 +1,6 @@
 namespace CombatSim.Core.Features.Simulator.Models;
 
-public class Creature
+public class CreatureInput
 {
     
     #region Properties
@@ -17,9 +17,9 @@ public class Creature
 
     #region Public Methods
 
-    public Creature Clone()
+    public CreatureInput Clone()
     {
-        return new Creature
+        return new CreatureInput
         {
             IsHero = IsHero,
             Order = Order,

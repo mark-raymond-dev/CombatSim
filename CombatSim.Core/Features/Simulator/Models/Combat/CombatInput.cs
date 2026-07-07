@@ -2,13 +2,19 @@ namespace CombatSim.Core.Features.Simulator.Models;
 
 public class CombatInput
 {
-    public List<Creature> Creatures { get; set; } = new List<Creature>();
+    public List<CreatureInput> Creatures { get; set; } = new List<CreatureInput>();
+
+    public int SimulationCount { get; set; } = 1;
+
+    public int MillisecondsDelayBetweenRounds { get; set; } = 0;
 
     public CombatInput Clone()
     {
         return new CombatInput
         {
-            Creatures = Creatures.Select(c => c.Clone()).ToList()
+            Creatures = Creatures.Select(c => c.Clone()).ToList(),
+            SimulationCount = SimulationCount,
+            MillisecondsDelayBetweenRounds = MillisecondsDelayBetweenRounds
         };
     }
 }

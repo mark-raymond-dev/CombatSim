@@ -21,12 +21,14 @@ var cache = new Dictionary<string, ParseDamageResponse>();
 var service = new SimulatorService(httpClient, cache);
 if (doMonteCarlo)
 {
-    var combatOutputCollection = await service.FightMultiple(combatInput, count: 1000);
+    combatInput.SimulationCount = 1000;
+    var combatOutputCollection = await service.Simulate(combatInput);
     var report = combatOutputCollection.GetReport();
     Console.WriteLine(report);
 }
 else
 {
-    var combatOutput = await service.Fight(combatInput);
+    var combatOutputCollection = await service.Simulate(combatInput);
+    var combatOutput = combatOutputCollection[0];
     Console.WriteLine(combatOutput);
 }

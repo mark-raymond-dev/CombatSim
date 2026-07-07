@@ -6,6 +6,7 @@ public class CombatOutputCollection : List<CombatOutput>
     #region Properties
 
     public int CacheCount { get; set; }
+    public long ElapsedMilliseconds { get; set; }
 
     #endregion
 
