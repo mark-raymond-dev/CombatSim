@@ -1,259 +1,112 @@
-# CombatSim — Project Context File
-# Keep this file current. Paste it into every new chat window at the start of a session.
-# Update the "Active Milestone" and "Decisions Log" sections as work progresses.
+# CombatSim — Project Context
+
+## Purpose & Context
+
+Mark is building **CombatSim**, a Pathfinder 2e battle simulator in C# (.NET 10), located at `C:\dev\CS\`. It is a deliberate companion learning project to his existing **BattleReady** project (`C:\dev\BR\`), a deployed Azure API for analytical probability calculations. CombatSim takes a simulation approach (real dice rolls, mutable combat state) contrasting with BattleReady's analytical method. The project is structured as a numbered milestone curriculum, with Claude acting as a guide — providing problem statements, code review, and targeted hints rather than upfront solutions.
+
+Key environment and style preferences:
+- VS Code and dotnet CLI exclusively (no Visual Studio, no Azure CLI)
+- Traditional constructors over primary constructors (interview clarity rationale)
+- Prefers verbose/explicit code over condensed one-liners when clarity is gained
+- Wants to understand *why* something works, not just accept syntax on faith
+- Prefers working through problems independently with hints, but will explicitly ask to "just show me" when done with the Socratic approach — Claude should comply immediately when that signal is given
+- Comfortable pushing back on Claude's architectural reasoning; Claude should treat pushback as a prompt to reassess, not restate
+- For pure syntax questions (vs. design/reasoning questions), Mark may explicitly ask Claude to skip the Socratic approach and just provide the answer directly
+
+BattleReady serves as an architectural reference point. Established BattleReady patterns (e.g., separating API-layer annotations from Core models) carry weight in CombatSim design decisions, and are treated as the default unless Mark identifies a specific reason to diverge.
 
 ---
 
-## Project Identity
+## Current State: Milestone 6 — COMPLETE
 
-- **Project name:** CombatSim
-- **Root folder:** C:\dev\CS\
-- **Abbreviation:** CS
-- **Solution name:** CombatSim (currently CombatSim.Core, CombatSim.Console; will grow further, e.g. CombatSim.Tests, as the project develops)
-- **.NET version:** .NET 10
-- **Language:** C# — traditional constructors preferred over primary constructors (interview clarity)
-- **Editor:** VS Code + dotnet CLI exclusively (not Visual Studio)
+**Milestone 6 built `CombatSim.Api`, a Web API project exposing simulation logic from `CombatSim.Core` over HTTP, and deployed it to Azure.** This milestone is now fully closed — code, validation, thread-safety, and live deployment all verified.
 
----
+### Final architecture delivered:
 
-## What CombatSim Is
+**Solution structure:**
+- `CombatSim.Core` — simulation logic, models
+- `CombatSim.Console` — console runner
+- `CombatSim.Api` — Web API layer (complete, deployed)
 
-A Pathfinder 2e battle simulator. Two parties of combatants face each other. Each combatant
-has HP, AC, ToHit, and a damage expression (e.g. "2d8+6 slashing"). The simulation runs
-round by round — each combatant takes a turn, attacks someone on the opposing side, damage
-is applied, HP drops, dead combatants stop acting — until one side is fully wiped out.
-The winner is reported.
+**API design:**
+- Single endpoint: `POST /api/simulator/simulate`
+- `SimulatorController` depends on `ISimulatorService` (interface, not concrete class)
+- `ISimulatorService.Simulate(CombatInput)` returns `Task<CombatOutputCollection>` — unified single-fight and multi-run cases (`SimulationCount` on the input drives the loop; `SimulationCount = 1` is just the trivial case)
+- `CombatSim.Api/Models/Requests/CombatRequest.cs` and `CreatureRequest.cs` — dedicated request DTOs with `DataAnnotations` + `IValidatableObject` (for cross-field rules like "at least one hero and one monster required"), mirroring BattleReady's Api/Core separation
+- `CombatSim.Api/Mapping/CombatRequestExtensions.cs` and `CreatureRequestExtensions.cs` — `ToInput()` extension methods mapping `CombatRequest` → `CombatInput`
+- `[ApiController]` handles automatic 400 responses on validation failure — no manual validation code in the controller
 
-The simulation can be run N times to report win percentages empirically (Monte Carlo
-style), contrasting with BattleReady's analytical probability approach.
+**DI wiring (`Program.cs`):**
+- `builder.Services.AddHttpClient();` — registers `IHttpClientFactory` cleanly (not the typed-client form)
+- `IDictionary<string, ParseDamageResponse>` cache registered as **Singleton** via explicit factory lambda, backed by `ConcurrentDictionary<string, ParseDamageResponse>` (not `Dictionary`)
+- `ISimulatorService` registered as **Singleton** via explicit factory lambda: `provider => new SimulatorService(httpClientFactory.CreateClient(), cache)` — bypasses the DI container's constructor-guessing entirely, avoiding the circular-dependency error that plain `AddSingleton<TInterface, TImpl>()` triggered with `IDictionary`'s copy-constructor ambiguity
 
-Damage parsing is no longer a stub — as of Milestone 5, it's a real HTTP call to
-BattleReady's live `ParseDamage` endpoint, with in-memory caching to avoid redundant
-network calls for repeated damage expressions.
+**Thread-safety — verified, not just reasoned about:**
+- The shared `_cache` (damage-parse cache, keyed on damage expression strings) was the *only* shared mutable state in `SimulatorService`; everything else is per-call locals
+- Confirmed via a custom C# console load-test script (`Task.WhenAll` firing concurrent POSTs) that `Dictionary`-backed cache threw `InvalidOperationException: "concurrent update... corrupted its state"` under real concurrent load
+- Swapping to `ConcurrentDictionary` (keeping the existing `TryGetValue` + manual-assignment pattern, deliberately *not* using `GetOrAdd`, since the cached operation is an expensive external HTTP call and `GetOrAdd`'s factory can run more than once under contention) fully resolved it — verified clean under repeated hammering
 
-**Relationship to BattleReady:**
-CombatSim is a deliberate companion project to BattleReady (C:\dev\BR\), built as a
-separate learning exercise. It shares the PF2e domain but solves a fundamentally
-different problem: mutable state + simulation over time vs. static probability
-calculation. As of Milestone 5, CombatSim.Core makes real HTTP calls out to BattleReady's
-deployed Azure API to parse damage expressions (e.g. "2d8+6 slashing" → structured dice
-data), demonstrating real service-to-service HTTP integration.
+**NuGet vulnerability fix:**
+- `Microsoft.OpenApi` transitive dependency (via `Microsoft.AspNetCore.OpenApi`) resolved to a vulnerable `2.0.0` (NU1903, GHSA-v5pm-xwqc-g5wc — stack-overflow DoS via malicious OpenAPI document parsing)
+- Fixed via a direct `PackageReference` override to `Microsoft.OpenApi 2.7.5` in `CombatSim.Api.csproj` — NuGet prefers an explicit direct reference over the same package pulled in transitively
 
-**BattleReady live API base URL:**
-https://battleready-api-b4h4brhga5dea5ay.westus3-01.azurewebsites.net
+**Deployment — live and verified:**
+- Azure App Service `combatsim-api` (West US 3, Windows, .NET 10, F1 free tier), GitHub Actions CI/CD from the `main` branch
+- Fixed a real deployment bug: the auto-generated GitHub Actions workflow ran `dotnet build`/`dotnet publish` with no project argument, which (since the repo root has a `.slnx`) built/published the **entire solution** into one flat output folder — mixing `CombatSim.Console.exe` in with the API's files and missing a clean, unambiguous entry point
+- Fix: scoped both commands to the target project — `dotnet build CombatSim.Api -c Release` / `dotnet publish CombatSim.Api -c Release -o "${{env.DOTNET_ROOT}}/myapp"`
+- Verified live at `https://combatsim-api-f6ezbgd7ayhbd4c6.westus3-01.azurewebsites.net/swagger/index.html` — Swagger UI renders all schemas correctly, `POST /api/simulator/simulate` executes successfully against the real BattleReady API dependency
 
-**BattleReady ParseDamage endpoint (as consumed by CombatSim):**
-`GET /api/v1/ParseDamage/calculate?Expression={escaped damage expression}`
-Returns a JSON body deserialized into `ParseDamageResponse` (DamageDieBase,
-DamageDieCount, DamageModifier — hand-coded model class, not generated from Swagger).
-
-**BattleReady rate limiting (confirmed from BattleReady's own Program.cs):**
-Fixed window policy — 30 requests per 10-second window, `QueueLimit = 0` (no queueing;
-excess requests immediately receive HTTP 429), `QueueProcessingOrder.OldestFirst`.
-No `Retry-After` or custom rate-limit headers are emitted (standard ASP.NET Core
-rate limiter middleware, not custom-configured to add them).
+**`elapsedMilliseconds = 0` investigation — resolved as correct behavior, not a bug:**
+- Observed `elapsedMilliseconds = 0` for all combats after the first in a batch, and eventually for *all* combats including the first
+- Root cause (confirmed via a deliberate Azure App Service restart, which clears the singleton's in-memory cache): the damage-parse cache is genuinely app-lifetime (Singleton), so only a truly cold cache pays the BattleReady HTTP round-trip cost (verified: `179ms`, consistent with an earlier `385ms` cold measurement). Every cache-hit combat thereafter completes in sub-millisecond time, which `Stopwatch.ElapsedMilliseconds` (an integer-truncating property) correctly reports as `0`
+- A separate, unrelated symptom (a 6-minute delay and repeated browser "Page Unresponsive" dialogs when re-running large `SimulationCount` values without refreshing Swagger) was isolated as a **Swagger UI / browser-side DOM rendering issue** — stacking large rendered JSON responses in the same tab — not a server-side or API bug. Refreshing the Swagger page before each large test eliminated it entirely (confirmed: `SimulationCount = 100` completed in ~32–34 real seconds on a fresh page load)
+- No code changes were needed; this was a successful validation exercise, not a fix
 
 ---
 
-## Guiding Principles (agreed before milestone 1)
+## On the Horizon
 
-1. **No copy-pasting from BattleReady.** Mark may look at BattleReady for general ideas,
-   but all code is typed fresh. The goal is re-deriving architecture, not cloning it.
-2. **Milestones are problem statements, not specs.** Claude hands Mark a situation to
-   solve; no field names, class names, or implementation hints are given upfront.
-3. **Tight loop with opt-out.** Default is frequent check-ins. Mark can declare "I'm
-   taking a bigger chunk" and go quiet — that's explicitly fine. Check-in when done or
-   stuck.
-4. **Divergence from BattleReady's history is not failure.** If Mark's design choices
-   differ from BattleReady's, that's a real decision to compare and discuss — not a
-   wrong answer to correct.
-5. **One chat window per milestone (roughly).** Split at milestone boundaries. Update
-   this file before closing any window. Paste this file at the start of every new window.
+Remaining planned milestones (not yet started):
+- Dependency injection refinement (revisit whether Milestone 7 changes anything about today's factory-based registrations)
+- Persistence
+- Testing
+
+No open items carried forward from Milestone 6 — it is fully closed.
 
 ---
 
-## Milestone Shape (rough — subject to adjustment as work progresses)
+## Key Learnings & Principles
 
-| # | Focus | Status |
-|---|-------|--------|
-| 1 | Single console app — hardcoded parties, real dice rolling, full round-by-round simulation, termination condition, winner reported | **COMPLETE** |
-| 2 | Multiple simulations (run N times), win-percentage reporting | **COMPLETE** |
-| 3 | Project split — Core + Console — once logic is rich enough that testing without running the app becomes a felt need | **COMPLETE** |
-| 4 | Wire up GitHub repo and free-tier Azure App Service (rehearsing the setup already done for BattleReady) | **COMPLETE** |
-| 5 | Replace stub damage parsing with real HTTP call to BattleReady's ParseDamage API endpoint | **COMPLETE** |
-| 6 | Web API project — expose the simulation as an HTTP endpoint; deploy to the Azure App Service provisioned in Milestone 4 | Not started |
-| 7 | Dependency Injection, service interfaces, proper layering | Not started |
-| 8 | Input validation, error handling | Not started |
-| 9 | Persistence (logging simulation results) | Not started |
-| 10 | Testing — unit + integration | Not started |
-| 11+ | Further features TBD (JWT, versioning, etc. mirroring BattleReady's later journey) | Not started |
+- **`new HttpClient()` per-call is a critical anti-pattern** — caused 60–80 second runtimes in Milestone 5; `IHttpClientFactory` is the correct solution. In a Web API without container-driven constructor injection, resolve `IHttpClientFactory` explicitly inside a DI factory lambda and call `.CreateClient()` — do not rely on `AddHttpClient<T>()`'s typed-client side effects when manually constructing `T` yourself.
+- **Caching identical inputs matters at scale** — a cache keyed on damage expression strings eliminated redundant API calls to BattleReady's `ParseDamage` endpoint and addressed rate limiting (BattleReady: fixed-window, ~30 req/10s, no Retry-After).
+- **DI lifetime mismatches cause real bugs** — `AddScoped` with `IDictionary` caused circular dependency issues; `Singleton` is correct for stateful shared caches that should persist for the app's lifetime.
+- **Factory lambdas solve constructor ambiguity** — `provider => new ConcurrentDictionary<...>()` bypasses the container's constructor-guessing for types like `IDictionary`, whose implementing type (`Dictionary<TKey,TValue>`) has a copy-constructor overload that otherwise creates a circular-dependency trap.
+- **Plain `Dictionary<TKey,TValue>` is not safe for any concurrent read+write mix** — not just write+write. Verified empirically: concurrent HTTP requests hitting a singleton service's `Dictionary`-backed cache threw `InvalidOperationException` reporting internal state corruption. `ConcurrentDictionary` fixed it. `GetOrAdd`'s factory-may-run-more-than-once behavior was deliberately avoided here because the cached operation is an external HTTP call — explicit `TryGetValue` + manual assignment was the correct choice.
+- **`dotnet build`/`dotnet publish` with no project argument, run inside a multi-project solution folder, silently targets the whole `.slnx`** — this produced a flattened, ambiguous publish output mixing an unrelated console app's `.exe` in with the Web API's files. Always scope CI/CD build and publish commands to the specific project.
+- **NuGet prefers an explicit direct `PackageReference` over the same package pulled in transitively** — used to resolve a `Microsoft.OpenApi` vulnerability warning by adding a direct reference at a patched version, without touching the transitive parent package.
+- **Stopwatch.ElapsedMilliseconds truncates to whole milliseconds** — a `0` reading for very fast, cache-hit, no-network-I/O operations is accurate, not a bug. `Stopwatch.Elapsed.TotalMilliseconds` or `ElapsedTicks` would show sub-millisecond precision if ever needed.
+- **Swagger UI can freeze the browser tab, not the server, when re-executing against large stacked JSON responses without a page refresh** — always refresh before re-running a request with a much larger expected payload, and don't mistake browser unresponsiveness for API slowness.
+- **`Clone()` fragility is a known deferred risk** — silent staleness when new fields are added; accepted as a known issue.
+- **Mark's pushback is often correct** — mid-round attacker guard, `.slnx` vs `.sln` format, option (b) DataAnnotations framing, and the BattleReady-consistency question on where DataAnnotations belong were all cases where Mark identified errors or gaps in Claude's reasoning that led to a better outcome.
 
 ---
 
-## Active Milestone
+## Approach & Patterns
 
-**Milestone 6 — NOT YET STARTED**
-
-Focus: add a `CombatSim.Api` Web API project exposing the simulation as an HTTP endpoint,
-and deploy it to the Azure App Service (`combatsim-api`) provisioned as an empty shell
-back in Milestone 4.
-
-Problem statement / walkthrough: not yet written. Claude will prepare it at the start of
-the next chat window, in the new session where Milestone 6 begins.
+- **Session structure**: Claude produces an updated `CONTEXT.md` at the end of each milestone session; Mark replaces his local copy and opens a new chat attaching the file to begin the next milestone
+- **Code review loop**: Mark implements independently, submits as zip files, Claude reviews and flags issues with clear rationale
+- **Milestone insertion**: When gaps are identified (e.g., GitHub/Azure setup), Mark prefers inserting them as proper numbered milestones with full renumbering, not side detours
+- **Architectural decisions are logged** in `CONTEXT.md` with rationale, so future sessions have continuity without re-litigating settled choices
+- **Debugging approach**: When investigating an unexpected result, Claude proposes concrete, falsifiable experiments (e.g., "run SimulationCount=5 and report the exact per-combat values," "restart the App Service and re-test") rather than resolving ambiguity through reasoning alone — several apparent bugs this milestone turned out to be correct behavior once tested directly
 
 ---
 
-## Milestone 5 wrap-up notes (Real damage parsing via BattleReady HTTP call — COMPLETE)
+## Tools & Resources
 
-**What was built:**
-- `SimulatorService` now takes constructor-injected `HttpClient` and
-  `Dictionary<string, ParseDamageResponse>` (cache), both created once in
-  `Program.cs` and passed in — correct lifetime management, avoiding the
-  well-known "new HttpClient() per call" anti-pattern that caused an early
-  60-80 second single-combat runtime.
-- `ParseDamage(string damageExpression)` — new private method. Checks cache first
-  (`TryGetValue`), returns cached result immediately on hit. On miss, calls
-  BattleReady's `GET /api/v1/ParseDamage/calculate` endpoint via `HttpClient.GetAsync`
-  (not `GetFromJsonAsync`, deliberately — raw `HttpResponseMessage` needed to branch
-  on status code without throwing). On success, deserializes, caches, returns.
-- **429 (Too Many Requests) handling:** on a non-429 failure, throws immediately.
-  On a 429, retries up to 3 times with exponential backoff (`300ms * retry`),
-  breaking out early on first success; throws only if all retries are exhausted.
-  Retry delay of 300ms was chosen with BattleReady's actual limiter numbers in mind
-  (30 req / 10 sec ≈ 333ms average sustainable spacing).
-- `GetApiCallExceptionSuffix(HttpResponseMessage)` — small helper consolidating
-  exception-message formatting (URL, status code, reason phrase) used at both throw
-  sites.
-- `Uri.EscapeDataString` used to properly encode the damage expression (handles
-  spaces, `+`, etc.) into the query string — `Uri.EscapeUriString` was considered
-  and correctly rejected as obsolete/wrong for this purpose.
-- `RollDamage` simplified to just call `ParseDamage` and use the result — HTTP/cache
-  concerns fully separated from damage-roll math.
-- `Thread.Sleep` (used for the optional inter-round delay) replaced with
-  `await Task.Delay` — correct async citizenship, avoiding a blocked thread even
-  though the current single-fight, sequential-loop structure means there's no
-  observable speed difference yet. Delay parameter now defaults to `0`
-  (no delay) since caching made a blanket per-round delay largely unnecessary.
-- `CacheCount` surfaced on both `CombatOutput` (per-fight snapshot of cache size —
-  will read identically across most fights once the small set of distinct damage
-  expressions has been seen) and `CombatOutputCollection` / its report (final
-  cumulative cache size after a full `FightMultiple` batch, set once at the end).
-  Confirmed via actual run: 5 distinct damage expressions in the test roster → 
-  `CacheCount == 5`. This was a deliberate "verify, don't just assume no-exception-
-  means-correct" check.
-- `ParseDamageResponse.cs` hand-coded (not generated from Swagger/OpenAPI) — reasonable
-  given only 3 primitive properties. Placed under `Models/Shared/` (moved there from
-  an initial `Models/ParseDamage/` location) to match the precedent of `DieRoller` and
-  `DegreeOfSuccessCalculator`, which are also cross-cutting rather than domain-model
-  types.
-
-**Known deferred / non-priority items (tracked, not resolved):**
-- `HttpClient` and the cache `Dictionary` are manually constructed and passed via
-  plain constructor injection in `Program.cs` — no DI container yet. This is
-  explicitly correct for now; a real DI container (and likely `IHttpClientFactory`
-  in place of a raw long-lived `HttpClient`) is Milestone 7's concern.
-- Cache is a plain `Dictionary`, not `IMemoryCache` — deliberately: no expiration
-  need (parsed damage expressions never go stale), no memory pressure at this scale,
-  no concurrency need given the current single-threaded sequential fight loop.
-  Worth revisiting only if either of those assumptions changes.
-  Investigated OpenAPI/NSwag-style client generation as an alternative to hand-coding
-- response models for more complex APIs — not used here (too small a payload to
-  justify it) but noted as a real tool for future, larger integrations.
-- Retry/backoff logic is intentionally basic (fixed 3 retries, simple linear-scaled
-  backoff) — comprehensive resilience patterns explicitly out of scope per the
-  Milestone 5 problem statement; Milestone 8 (validation/error handling) is the
-  more natural home for anything more sophisticated if it's ever needed.
-- No exploration yet of whether Monte Carlo runs (1000 fights) could be parallelized
-  for speed — discussed conceptually (Task.Delay vs. Thread.Sleep does NOT by itself
-  produce parallelism; that would require restructuring FightMultiple's loop, e.g.
-  via Task.WhenAll) but not attempted. Flagged as a bigger, separate architectural
-  question, not a Milestone 5 concern.
-
----
-
-## Milestone 4 wrap-up notes (GitHub + Azure setup — COMPLETE)
-
-**GitHub:**
-- Local git repo initialized from zero in `C:\dev\CS\`.
-- `.gitignore` generated fresh via `dotnet new gitignore`.
-- Initial commit made ("Initial commit: Milestone 3 complete") and pushed to
-  `main` on `github.com/mark-raymond-dev/CombatSim` (public repo).
-- Repo confirmed live with all Milestone 3 contents: `CombatSim.Console/`,
-  `CombatSim.Core/`, `.gitignore`, `CONTEXT.md`, `CS.slnx`.
-
-**Azure App Service:**
-- Provisioned via the Azure Portal (Azure CLI not installed on Mark's machine —
-  Portal used for the entire Milestone 4 Azure flow, not CLI).
-- **Resource Group:** CombatSim-rg
-- **App Service name:** `combatsim-api` (no uniqueness suffix needed)
-- **Default hostname:** `combatsim-api-f6ezbgd7ayhbd4c6.westus3-01.azurewebsites.net`
-- **Region:** West US 3 (matches BattleReady)
-- **OS:** Windows (matches BattleReady)
-- **Runtime stack:** .NET 10
-- **Pricing tier:** F1 (Free) — found under the **Dev/Test** tab in the pricing
-  plan selector, separate from the Basic/Standard/Premium production tiers.
-  Confirmed on F1 after creation.
-- **Status:** resource shell only — no code deployed yet. Visiting the hostname
-  currently shows Azure's default placeholder page. Real deployment of
-  `CombatSim.Api` (once it exists) is deferred to Milestone 6.
-
----
-
-## Decisions Log
-
-| Decision | Reasoning |
-|----------|-----------|
-| CombatSim chosen as project name | Clean abbreviation (CS), scales well to CombatSim.Core etc., concise |
-| Root folder C:\dev\CS\ | Parallel to BattleReady's C:\dev\BR\ — clean separation |
-| Damage parsing via HTTP call to BattleReady API (not referenced as a library) | Demonstrates real service-to-service HTTP client pattern; more portfolio-relevant than a DLL reference |
-| Dice rolls are real random rolls (not probability calculations) | Simulation approach — empirical vs. analytical; deliberate contrast with BattleReady |
-| Milestone 1 uses stub/hardcoded damage parsing (2d6+3) | Avoid debugging simulation loop AND HTTP client simultaneously; clean it up once real HTTP parsing is added (now Milestone 5, after GitHub/Azure setup was inserted as Milestone 4) |
-| Inserted GitHub/Azure wiring as its own Milestone 4 (renumbering damage-parsing HTTP and everything after it) | Deployment tooling deserves visibility in the milestone narrative for portfolio purposes, but is a mechanical/rehearsal task rather than an open-ended design problem — different in character from the other milestones |
-| Milestone 1 is deliberately ugly/hardcoded | Same philosophy as BattleReady's own origin — get something end-to-end before adding architecture |
-| Focus fire targeting (always attack the first living enemy) | Realistic default strategy; produces faster kills and more decisive outcomes than random selection |
-| `attacker.HP > 0` guard kept inside the round loop | Creatures can die mid-round; the alive list is built once at round start so the guard is necessary |
-| Shared static `Random` instance in `DieRoller` | Avoids re-seeding issue from instantiating `new Random()` per call |
-| Winner stored as `DidHeroesWin` bool on `CombatOutput` | Simple, sufficient for Milestone 1; can be enriched later |
-| Clone-before-run pattern for Monte Carlo (Milestone 2) | `Fight()` mutates `Creature.HP` in place; running N times requires fresh state each run. `CombatInput.Clone()` delegates to a `Clone()` method on `Creature` itself, keeping copy logic next to the fields it copies rather than hand-copied by a calling type. |
-| Aggregation/reporting given its own type (`CombatOutputCollectionReport`) | Keeps win%, lose%, avg rounds, etc. out of `Program.cs`; produced via `CombatOutputCollection.GetReport()` |
-| Two-project split: `CombatSim.Core` + `CombatSim.Console` (Milestone 3) | Enables testing simulation logic in isolation ahead of the testing milestone (now Milestone 10); Console reduced to wiring + printing only |
-| `.slnx` used instead of legacy `.sln` | Newer XML-based solution format; both projects referenced from it |
-| Flat namespace across Core `Models` subfolders (not mirroring folder structure) | Accepted inconsistency for now — folders organize by concern, namespace doesn't subdivide further; not a current priority |
-| Everything left `public` after the split | No encapsulated internals in Core yet that need hiding from Console; avoids premature visibility restrictions |
-| Removed dead `CreatureInitializer.Setup()` rather than reconciling it with `Program.cs`'s hardcoded roster | It was unreferenced and had drifted out of sync (100 HP vs. 150 HP trolls) — simplest correct fix was deletion, not merging |
-| Azure setup done via Portal, not CLI (Milestone 4) | Azure CLI (`az`) not installed on Mark's machine; rather than pausing to install/configure it, the Portal UI was used directly, matching how BattleReady's tier discovery (F1 under Dev/Test) was already found interactively |
-| Azure App Service provisioned as an empty resource shell in Milestone 4, ahead of `CombatSim.Api` existing | Rehearses environment/deployment tooling on its own timeline, decoupled from the Web API project build-out; real deployment happens in Milestone 6 once there's code to push |
-| App Service OS set to Windows, runtime .NET 10 | Matches BattleReady's own environment for a consistent comparison between the two projects |
-| `HttpClient` constructor-injected into `SimulatorService`, created once in `Program.cs` (Milestone 5) | Avoids the "new HttpClient() per call" socket-exhaustion anti-pattern; a full DI container / `IHttpClientFactory` deferred to Milestone 7 as the more complete solution |
-| In-memory `Dictionary<string, ParseDamageResponse>` cache, constructor-injected alongside `HttpClient`, keyed on the raw damage expression string | Damage expressions are few in number and never change meaning once parsed — no expiration/eviction/concurrency need justifies `IMemoryCache`'s extra complexity at this scale; plain `Dictionary` is honest to the actual requirements |
-| `HttpClient.GetAsync` used instead of `GetFromJsonAsync` for the ParseDamage call | Needed the raw `HttpResponseMessage` to branch on status code (specifically 429) without an automatic throw/deserialize hiding that information |
-| 429 (Too Many Requests) retried up to 3x with exponential backoff (300ms × retry); all other failures throw immediately | Matches BattleReady's actual confirmed rate limiter (30 req/10s fixed window, no queueing, no Retry-After header) — retrying only makes sense for the specific transient case a rate limiter represents, not for genuine errors |
-| `ParseDamageResponse` hand-coded rather than generated via NSwag/OpenAPI tooling | Reasonable at 3 simple primitive properties; codegen tooling noted as the right call for larger/more complex response contracts in the future |
-| `ParseDamageResponse.cs` placed in `Models/Shared/` (moved from an initial `Models/ParseDamage/` location) | Matches the precedent set by `DieRoller` and `DegreeOfSuccessCalculator` — cross-cutting utility-adjacent types, not domain models like `Creature`/`CombatInput` |
-| `Thread.Sleep` replaced with `await Task.Delay` for the optional inter-round pacing delay | Correct async citizenship — doesn't block a pooled thread — even though the current sequential single-fight-at-a-time structure means no observable speed difference yet; sets up good habits ahead of any future parallelization |
-| `CacheCount` added to both `CombatOutput` (per-fight) and `CombatOutputCollection`/its report (final cumulative, set once after all fights complete) | Different questions answered at each level; also served as a deliberate correctness check (confirmed 5 distinct damage expressions → CacheCount == 5) rather than trusting "no exception thrown" as proof the cache worked |
-
----
-
-## How to Use This File
-
-**At the end of a session:**
-- Update "Active Milestone" with current status and any mid-milestone notes
-- Add any new decisions to the Decisions Log
-- Update the milestone table status column
-
-**At the start of a new session:**
-- Paste this entire file into the new chat window
-- Tell Claude which milestone you're on and whether you're starting fresh or resuming
-- Claude will read this and be immediately up to speed
-
----
-
-## Related Projects & Resources
-
-- **BattleReady repo:** https://github.com/mark-raymond-dev/BattleReady
-- **BattleReady live Swagger:** https://battleready-api-b4h4brhga5dea5ay.westus3-01.azurewebsites.net/swagger
-- **BattleReady Study Guide v4:** generated document covering 125 concepts across the BattleReady build journey — primary study reference
-- **BattleReady root folder:** C:\dev\BR\
-- **CombatSim repo:** https://github.com/mark-raymond-dev/CombatSim
-- **CombatSim Azure App Service (empty shell, awaiting Milestone 6 deployment):** https://combatsim-api-f6ezbgd7ayhbd4c6.westus3-01.azurewebsites.net
+- **Languages/runtime**: C# / .NET 10
+- **Editor**: VS Code + dotnet CLI
+- **Source control**: Git / GitHub (`mark-raymond-dev` account), repo: `github.com/mark-raymond-dev/CombatSim` (public)
+- **Cloud**: Azure App Service `combatsim-api` (West US 3, F1 free tier, Windows), GitHub Actions CI/CD from `main`
+- **Live API**: `https://combatsim-api-f6ezbgd7ayhbd4c6.westus3-01.azurewebsites.net/swagger/index.html`
+- **External API**: BattleReady `ParseDamage` endpoint (live, rate-limited, occasional cold-start delay from its database)
+- **Project context file**: `CONTEXT.md` (passed between sessions as the continuity mechanism)
