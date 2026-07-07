@@ -9,6 +9,7 @@ public static class CombatRequestExtensions
     {
         Creatures = request.Creatures?.Select(c => c.ToInput()).ToList() ?? new List<CreatureInput>(),
         SimulationCount = request.SimulationCount ?? 1,
-        MillisecondsDelayBetweenRounds = request.MillisecondsDelayBetweenRounds ?? 0
+        MillisecondsDelayBetweenRounds = request.MillisecondsDelayBetweenRounds,
+        ReturnType = request.ReturnType ?? ReturnType.SummaryReport
     };
 }

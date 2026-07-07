@@ -8,13 +8,16 @@ public class CombatInput
 
     public int MillisecondsDelayBetweenRounds { get; set; } = 0;
 
+    public ReturnType ReturnType { get; set; } = ReturnType.SummaryReport;
+
     public CombatInput Clone()
     {
         return new CombatInput
         {
             Creatures = Creatures.Select(c => c.Clone()).ToList(),
             SimulationCount = SimulationCount,
-            MillisecondsDelayBetweenRounds = MillisecondsDelayBetweenRounds
+            MillisecondsDelayBetweenRounds = MillisecondsDelayBetweenRounds,
+            ReturnType = ReturnType
         };
     }
 }

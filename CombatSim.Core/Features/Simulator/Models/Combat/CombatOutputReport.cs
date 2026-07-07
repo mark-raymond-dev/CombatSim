@@ -2,17 +2,13 @@ using System.Text;
 
 namespace CombatSim.Core.Features.Simulator.Models;
 
-public class CombatOutputCollectionReport
+public class CombatOutputReport
 {
 
     #region Properties
 
-    public int TotalCombats { get; internal set; }
-    public int HeroWinCount { get; internal set; }
-    public int HeroLoseCount { get; internal set; }
-    public decimal HeroWinPercentage { get; internal set; }
-    public decimal HeroLosePercentage { get; internal set; }
-    public double AverageRoundsPerCombat { get; internal set; }
+    public int TotalRounds { get; internal set; }
+    public bool DidHeroesWin { get; internal set; }
     public int StartCacheCount { get; internal set; }
     public int EndCacheCount { get; internal set; }
     public DateTime StartTime { get; internal set; }
@@ -27,12 +23,8 @@ public class CombatOutputCollectionReport
     {
         var sb = new StringBuilder();
         sb.Append("-------- SIMULATION REPORT --------\n");
-        sb.Append($"Total simulated combats: {TotalCombats}\n");
-        sb.Append($"Hero win count: {HeroWinCount}\n");
-        sb.Append($"Hero lose count: {HeroLoseCount}\n");
-        sb.Append($"Hero win percentage: {HeroWinPercentage:P3}\n");
-        sb.Append($"Hero lose percentage: {HeroLosePercentage:P3}\n");
-        sb.Append($"Average rounds per combat: {AverageRoundsPerCombat:F3}\n");
+        sb.Append($"Total rounds: {TotalRounds}\n");
+        sb.Append($"Did heroes win: {DidHeroesWin}\n");
         sb.Append($"Starting cache count: {StartCacheCount}\n");
         sb.Append($"Ending cache count: {EndCacheCount}\n");
         sb.Append($"Start time: {StartTime:O}\n");

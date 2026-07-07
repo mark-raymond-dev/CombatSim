@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using CombatSim.Core.Features.Simulator.Models;
 
 namespace CombatSim.Api.Models;
 
@@ -14,9 +15,11 @@ public class CombatRequest : IValidatableObject
     [Range(1, 100000, ErrorMessage = "Simulation count must be between 1 and 100000.")]
     public int? SimulationCount { get; set; }
 
-    [Required(ErrorMessage = "Milliseconds delay between rounds is required.")]
-    [Range(0, 10000, ErrorMessage = "Milliseconds delay between rounds must be between 0 and 10000.")]
-    public int? MillisecondsDelayBetweenRounds { get; set; }
+    [Range(0, 1000, ErrorMessage = "Milliseconds delay between rounds must be between 0 and 1000.")]
+    public int MillisecondsDelayBetweenRounds { get; set; }
+
+    [Required(ErrorMessage = "Return type is required.")]
+    public ReturnType? ReturnType { get; set; }
 
     #endregion
 

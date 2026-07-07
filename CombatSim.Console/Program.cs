@@ -15,7 +15,7 @@ var combatInput = new CombatInput
     ]
 };
 
-bool doMonteCarlo = true;
+bool doMonteCarlo = false;
 var httpClient = new HttpClient();
 var cache = new Dictionary<string, ParseDamageResponse>();
 var service = new SimulatorService(httpClient, cache);
@@ -23,12 +23,11 @@ if (doMonteCarlo)
 {
     combatInput.SimulationCount = 1000;
     var combatOutputCollection = await service.Simulate(combatInput);
-    var report = combatOutputCollection.GetReport();
-    Console.WriteLine(report);
+    Console.WriteLine(combatOutputCollection.Report);
 }
 else
 {
     var combatOutputCollection = await service.Simulate(combatInput);
-    var combatOutput = combatOutputCollection[0];
+    var combatOutput = combatOutputCollection.Combats[0];
     Console.WriteLine(combatOutput);
 }

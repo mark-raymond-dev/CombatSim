@@ -148,10 +148,7 @@ public class SimulatorService : ISimulatorService
 
     private async Task<CombatOutput> ProcessCombat(CombatInput combatInput)
     {
-        Stopwatch stopwatch = new Stopwatch();
-        stopwatch.Start();
-
-        var combatOutput = new CombatOutput();
+        var combatOutput = new CombatOutput(startCacheCount: _cache.Count);
         int roundNumber = 0;
         int msDelay = combatInput.MillisecondsDelayBetweenRounds;
         bool continueCombat = IsContinueCombat(combatInput);
@@ -189,11 +186,8 @@ public class SimulatorService : ISimulatorService
         }
 
         int heroAliveCount = AliveCount(combatInput, isHero: true);
-        combatOutput.DidHeroesWin = heroAliveCount > 0;
-        combatOutput.CacheCount = _cache.Count;
-
-        stopwatch.Stop();
-        combatOutput.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
+        var didHeroesWin = heroAliveCount > 0;
+        combatOutput.FinalizeReport(didHeroesWin, endCacheCount: _cache.Count);
         return combatOutput;
     }
 
@@ -203,23 +197,36 @@ public class SimulatorService : ISimulatorService
 
     public async Task<CombatOutputCollection> Simulate(CombatInput combatInput)
     {
-        Stopwatch stopwatch = new Stopwatch();
-        stopwatch.Start();
+        var combatOutputCollection = new CombatOutputCollection(startCacheCount: _cache.Count);
 
-        var combatOutputCollection = new CombatOutputCollection();
-
-        // Execute the Fight method multiple times based on the SimulationCount property of CombatInput.
+        // Process the combat based on SimulationCount for CombatInput.
         for (var i = 0; i < combatInput.SimulationCount; i++)
         {
             var combatInputClone = combatInput.Clone();
             var combatOutput = await ProcessCombat(combatInputClone);
-            combatOutputCollection.Add(combatOutput);
+            combatOutputCollection.Combats.Add(combatOutput);
         }
 
-        combatOutputCollection.CacheCount = _cache.Count;
+        combatOutputCollection.FinalizeReport(endCacheCount: _cache.Count);
 
-        stopwatch.Stop();
-        combatOutputCollection.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
+        switch (combatInput.ReturnType)
+        {
+            case ReturnType.Reports:
+                foreach (var combat in combatOutputCollection.Combats)
+                {
+                    combat.Rounds.Clear();
+                }
+                break;
+
+            case ReturnType.SummaryReport:
+                combatOutputCollection.Combats.Clear();
+                break;
+
+            case ReturnType.All:
+            default:
+                break;
+        }
+
         return combatOutputCollection;
     }
 

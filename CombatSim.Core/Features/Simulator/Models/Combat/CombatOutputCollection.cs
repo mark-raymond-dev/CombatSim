@@ -1,30 +1,44 @@
+using System.Diagnostics;
+
 namespace CombatSim.Core.Features.Simulator.Models;
 
-public class CombatOutputCollection : List<CombatOutput>
+public class CombatOutputCollection
 {
 
-    #region Properties
+    #region Constructor
 
-    public int CacheCount { get; set; }
-    public long ElapsedMilliseconds { get; set; }
+    private readonly Stopwatch _stopwatch;
+    
+    public CombatOutputCollection(int startCacheCount)
+    {
+        Report.StartCacheCount = startCacheCount;
+        Report.StartTime = DateTime.UtcNow;
+        _stopwatch = Stopwatch.StartNew();
+    }
 
     #endregion
 
-    #region Public Methods
+    #region Properties
 
-    public CombatOutputCollectionReport GetReport()
+    public List<CombatOutput> Combats { get; set; } = new List<CombatOutput>();
+    
+    public CombatOutputCollectionReport Report { get; internal set; } = new CombatOutputCollectionReport();
+
+    #endregion
+
+    #region Internal Methods
+
+    internal void FinalizeReport(int endCacheCount)
     {
-        var report = new CombatOutputCollectionReport
-        {
-            TotalCombats = Count,
-            HeroWinCount = this.Count(x => x.DidHeroesWin)
-        };
-        report.HeroLoseCount = report.TotalCombats - report.HeroWinCount;
-        report.HeroWinPercentage = (decimal)report.HeroWinCount / report.TotalCombats;
-        report.HeroLosePercentage = 1 - report.HeroWinPercentage;
-        report.AverageRoundsPerCombat = this.Average(x => x.Rounds.Count);
-        report.CacheCount = this.CacheCount;
-        return report;
+        Report.TotalCombats = Combats.Count;
+        Report.HeroWinCount = Combats.Count(x => x.Report.DidHeroesWin);        
+        Report.HeroLoseCount = Report.TotalCombats - Report.HeroWinCount;
+        Report.HeroWinPercentage = (decimal)Report.HeroWinCount / Report.TotalCombats;
+        Report.HeroLosePercentage = 1 - Report.HeroWinPercentage;
+        Report.AverageRoundsPerCombat = Combats.Average(x => x.Rounds.Count);
+        Report.EndCacheCount = endCacheCount;
+        Report.EndTime = DateTime.UtcNow;
+        Report.ElapsedMilliseconds = Math.Round(_stopwatch.Elapsed.TotalMilliseconds, 5);
     }
 
     #endregion
